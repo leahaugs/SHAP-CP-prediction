@@ -430,47 +430,6 @@ class SHAP_visualization():
 
         return image
 
-
-    def display_segments_cam(self, image, image_draw, coordinates, image_height=1024, image_width=1024, segment_width=3):
-        """
-        Draw segments between body parts according to predicted body part locations.
-        
-        Args:
-            image: PIL Image
-                The loaded image the coordinate predictions are inferred for
-            image_draw: PIL ImageDraw module
-                Module for performing drawing operations
-            coordinates: Numpy array
-                Predicted body part coordinates in image
-            image_height: int
-                Height of image
-            image_width: int
-                Width of image
-            segment_width: int
-                Width of association line between markers
-            
-        Returns:
-            Instance of PIL image with annotated body part segments.
-        """
-
-        # Define segments and colors
-        segments = [(0, 1), (1, 2), (1, 3), (1, 4), (4, 8), (8, 5), (5, 6), (6, 7), (8, 9), (9, 10), (10, 11), (8, 12),
-                    (12, 13), (13, 14), (14, 15), (12, 16), (16, 17), (17, 18)]
-        segment_color = '#5c5a5a'
-
-        # Draw segments
-        for (body_part_a_index, body_part_b_index) in segments:
-            body_part_a_x, body_part_a_y = coordinates[body_part_a_index]
-            body_part_a_x *= image_width
-            body_part_a_y *= image_height
-            body_part_b_x, body_part_b_y = coordinates[body_part_b_index]
-            body_part_b_x *= image_width
-            body_part_b_y *= image_height
-            image_draw.line([(body_part_a_x, body_part_a_y), (body_part_b_x, body_part_b_y)], fill=segment_color,
-                            width=segment_width)
-
-        return image
-
     
     def display_segments_shap(self, image, image_draw, coordinates, shaps, shaps_max_avg, cmap, image_height=1024,
                           image_width=1024, segment_width=3):
