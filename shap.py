@@ -1,21 +1,13 @@
-import json
+import math
 import os
-from os import listdir
 from os.path import join, dirname, basename, exists
-import random
-from matplotlib.colors import LinearSegmentedColormap
-import pandas as pd
-from torch.autograd import Variable
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 import numpy as np
-from tqdm import tqdm
-import yaml
-import torch
-from zipfile import ZipFile 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
 
-from utils.predict_helpers import coords_raw_to_norm, get_frame_rate, get_shap_color, get_video_metadata, get_data, load_data_all_videos, median_filter, read_csv_to_array
+from utils.predict_helpers import get_shap_color
 
 class SHAP():
 
@@ -248,202 +240,222 @@ class SHAP():
         join(dirname(video_path), 'outputs', basename(video_path).split('.')[0] + '_shap.png'),
         format='png')
 
+    def make_video_visualization(self, video_path, tracking_coords, window_preds, groups, split_point):
+        pred_interval_seconds = 2.5 # Seconds between each prediction window
+        shap_interval_seconds = 5.0 # Seconds between each SHAP update
+        preds_per_shap_interval = int(shap_interval_seconds / pred_interval_seconds)
 
+        shaps_dimensions_average, shaps_max_avg = self.calculate_shaps_average_x_y()
 
+        # Load raw video
+        from skvideo.io import vreader, ffprobe, FFmpegWriter
+        videogen = vreader(video_path)
+        video_metadata = ffprobe(video_path)['video']
+        fps = video_metadata['@r_frame_rate']
+        fps_num, fps_den = fps.split('/')
+        fps_float = float(fps_num) / float(fps_den)
+        frame_height, frame_width = next(vreader(video_path)).shape[:2]
+        frame_side = frame_width if frame_width >= frame_height else frame_height
 
+        # Initialize annotated video
+        vcodec = 'libvpx-vp9'  # 'libx264'
+        writer = FFmpegWriter(
+            join(dirname(video_path), 'outputs', basename(video_path).split('.')[0] + '_shap.mp4'),
+            inputdict={'-r': fps},
+            outputdict={'-r': fps, '-bitrate': '-1', '-vcodec': vcodec, '-pix_fmt': 'yuv420p', '-lossless': '1'})
 
-def setup(tracking_coords=0, frame_rate=0, folder_path="", video="", window_stride: int=2):
+        # Annotate video
+        from PIL import Image, ImageDraw
+        i = 0
+        while True:
 
-    if video:
-        video_path = join(folder_path, video)
+            try:
+                frame = next(videogen)
+                image = Image.fromarray(frame)
+                image_draw = ImageDraw.Draw(image)
+                image_coordinates = tracking_coords[i, ...].reshape((int(tracking_coords.shape[1] / 2), 2)).astype(
+                    'float32')
+                window_index = math.floor((i / fps_float) / shap_interval_seconds) * preds_per_shap_interval
+                window_indices = [window_index if window_index < window_preds.shape[0] else window_preds.shape[0] - 1]
+                for j in range(1, preds_per_shap_interval):
+                    next_window_index = window_indices[0] + j
+                    if next_window_index < window_preds.shape[0]:
+                        window_indices.append(next_window_index)
 
-        # Get video metadata
-        _, _, total_frames = get_video_metadata(video_path)
-        frame_rate = get_frame_rate(video_path) # Get float value of frame_rate
-        
-        # Get tracker data
-        tracker_data_file_path = join(dirname(video_path), 'outputs', basename(video_path).split('.')[0] + "_coordinates.csv")
-        if exists(tracker_data_file_path):
-            tracking_coords = read_csv_to_array(tracker_data_file_path)
-            tracking_coords = np.array(tracking_coords)
-
-    # Resample skeleton sequence
-    pred_frame_rate = 30.0
-    
-    # Seconds between each prediction window
-    pred_interval_seconds = 2.5
-
-    # Create header for csv
-    body_parts = ['head_top', 'nose', 'right_ear', 'left_ear', 'upper_neck', 'right_shoulder', 'right_elbow',
-                'right_wrist', 'thorax', 'left_shoulder', 'left_elbow', 'left_wrist', 'pelvis', 'right_hip',
-                'right_knee', 'right_ankle', 'left_hip', 'left_knee', 'left_ankle']
-    
-    num_joints = len(body_parts)
-    num_channels = 2
-    tracking_coords = tracking_coords.astype(float)
-    num_resampled_frames = np.interp(np.arange(0, len(tracking_coords[:,0]), (frame_rate / pred_frame_rate)), np.arange(0, len(tracking_coords[:,0])), tracking_coords[:,0]).shape[0] #int((total_frames/frame_rate)*pred_frame_rate)
-    resampled_tracking_coords = np.ndarray(shape=(num_resampled_frames, num_joints, num_channels))
-    for j in range (0, num_joints*2, num_channels):
-        resampled_tracking_coords[:,j//num_channels,0] = np.interp(np.arange(0, len(tracking_coords[:,j]), (frame_rate / pred_frame_rate)), np.arange(0, len(tracking_coords[:,j])), tracking_coords[:,j])
-        resampled_tracking_coords[:,j//num_channels,1] = np.interp(np.arange(0, len(tracking_coords[:,j+1]), (frame_rate / pred_frame_rate)), np.arange(0, len(tracking_coords[:,j+1])), tracking_coords[:,j+1]) 
-        
-    # Filter, centralize and normalize coordinates
-    pelvis_xs = resampled_tracking_coords[:,body_parts.index('pelvis'),0]
-    pelvis_ys = resampled_tracking_coords[:,body_parts.index('pelvis'),1]
-    thorax_xs = resampled_tracking_coords[:,body_parts.index('thorax'),0]
-    thorax_ys = resampled_tracking_coords[:,body_parts.index('thorax'),1]
-    median_pelvis_x = np.median(pelvis_xs)
-    median_pelvis_y = np.median(pelvis_ys)
-    trunk_lengths = np.sqrt((thorax_xs - pelvis_xs)**2 + (thorax_ys - pelvis_ys)**2)
-    median_trunk_length = np.median(trunk_lengths)
-
-    # Apply median filter
-    filter_coords = median_filter(resampled_tracking_coords, window_stride)
-    
-    # Centralize and normalize
-    norm_coords = coords_raw_to_norm(filter_coords, median_pelvis_x, median_pelvis_y, median_trunk_length)
-    data = np.expand_dims(norm_coords, 0)
-
-    return data
-
-def get_model_and_data(data, num_models, num_portions):
-    
-    # Perform inference per model
-    models = [i for i in range(1, num_models+1)]
-    portions = ['' if i==1 else i for i in range(1, num_portions+1)]
-
-    ensemble_models = []
-    ensemble_data = []
-    for model in models:
-        for portion in portions:
-            config_file = join('models', 'configs', 'gcn_5Best{0}_randinit_train{1}.yaml'.format(model, portion))
-            with open(config_file, 'r') as f:
-                config = yaml.safe_load(f)
-            args = {
-                **config['directories'], 
-                **config['train_feeder'], 
-                **config['val_feeder'], 
-                **config['model'], 
-                **config['graph'],
-                **config['features'], 
-                **config['optimization'], 
-                **config['training'], 
-                **config['validation']
-            }
-            args['val_parts_distance'] = 75
-            if torch.cuda.is_available(): #GPU
-                args['val_batch_size'] = 32
-            else: #CPU
-                args['val_batch_size'] = 4
-            args['num_workers'] = 0#4
-            weights_path = join('models', args['weights'])
-
-            eval_data, model2, target_layer, output_device = get_data(data, weights_path, args, 'shap')
+                # Video with SHAP values
+                image_shaps = np.median(shaps_dimensions_average[window_indices], axis=0)
+                colors = ["green", "white", "red"]
+                cmap = LinearSegmentedColormap.from_list("custom_cmap", colors)
+                image = self.display_segments_shap(image, image_draw, image_coordinates, image_shaps, shaps_max_avg, cmap, image_height=frame_height, image_width=frame_width, segment_width=int(frame_side/200))
+                image = self.display_body_parts_shap(image, image_draw, image_coordinates, image_shaps, shaps_max_avg, cmap, groups, image_height=frame_height, image_width=frame_width, marker_radius=int(frame_side/150), split_point=split_point)
+                writer.writeFrame(np.array(image))
+                i += 1
             
-            ensemble_data = eval_data
-            ensemble_models.append(model2)
+            except:
+                break
 
-    return ensemble_models, ensemble_data, output_device
-
-def shap_background_data_without_random(folder_path, video_names, num_models: int=10, num_portions: int=7):
-    graph_data = []
-    for video in video_names:
-
-        data = setup(folder_path=folder_path, video=video)
-        ensemble_models, video_data, output_device = get_model_and_data(data, num_models, num_portions)
-        graph_data.append(video_data)
-
-    print("Number of videos in background data:", len(graph_data))
-
-    # Slå sammen flere videoer
-    concat_data = load_data_all_videos(graph_data)
+        writer.close()
     
-    process = tqdm(concat_data)
-
-    for batch_idx, (data_y, index) in enumerate(process):
-        with torch.enable_grad():
-            # Fetch batch
-            if torch.cuda.is_available(): #GPU
-                data_y = Variable(
-                    data_y.float().cuda(output_device),
-                    requires_grad=True)
-            else: #CPU
-                data_y = Variable(
-                    data_y.float(),
-                    requires_grad=True)
+    def display_body_parts_shap(image, image_draw, coordinates, shaps, shaps_max_avg, cmap, groups, image_height=1024,
+                            image_width=1024, marker_radius=5, split_point=False):   
+        """
+        Draw markers on predicted body part locations.
         
-        data_list = data_y.tolist()
-        json_data = json.dumps(data_list, indent=4)
+        Args:
+            image: PIL Image
+                The loaded image the coordinate predictions are inferred for
+            image_draw: PIL ImageDraw module
+                Module for performing drawing operations
+            coordinates: Numpy array
+                Predicted body part coordinates in image
+            cams: Numpy array
+                Predicted body part contribution (CAM) in image
+            groups: Array
+                Body keypoint indices associated with groups of body keypoints
+            image_height: int
+                Height of image
+            image_width: int
+                Width of image
+            marker_radius: int
+                Radius of marker
+            cam_threshold: float
+                Threshold value of CAM for body part to contribute towards prediction of CP
+            binary: float
+                Flag for two-color visualization
+            color_scheme: string
+                Combination of colors to use for CAM visualization (e.g., 'GYOR' for 'G' = green, 'Y' = yellow, 'O' = orange and 'R' = red)
+        Returns:
+            Instance of PIL image with annotated body part predictions.
+        """
+
+        # Draw markers
+        shaps_pos = shaps[0]
+        shaps_vel = shaps[1]
+
+        for i, (body_part_x, body_part_y) in enumerate(coordinates):
+            for group in groups:
+                if i in group:
+                    group_indices = np.array(group)
+                    break
+            
+            shap_value_pos = np.mean(shaps_pos[group_indices])
+            color_pos = get_shap_color(shap_value_pos, shaps_max_avg, cmap)
+
+            shap_value_vel = np.mean(shaps_vel[group_indices])
+            color_vel = get_shap_color(shap_value_vel, shaps_max_avg, cmap)
+            
+            body_part_x *= image_width
+            body_part_y *= image_height
+            
+            if split_point:
+                marker_radius_inner = marker_radius * 0.8
+                marker_radius_outer = marker_radius * 1.5
+                image_draw.ellipse([(body_part_x - marker_radius_outer, body_part_y - marker_radius_outer),
+                                    (body_part_x + marker_radius_outer, body_part_y + marker_radius_outer)], fill=color_vel)
+                image_draw.ellipse([(body_part_x - marker_radius_inner, body_part_y - marker_radius_inner),
+                                    (body_part_x + marker_radius_inner, body_part_y + marker_radius_inner)], fill=color_pos)
+            else:
+                image_draw.ellipse([(body_part_x - marker_radius, body_part_y - marker_radius), (body_part_x + marker_radius, body_part_y + marker_radius)], fill=color_vel)
+
+        return image
+
+
+    def display_segments_cam(self, image, image_draw, coordinates, image_height=1024, image_width=1024, segment_width=3):
+        """
+        Draw segments between body parts according to predicted body part locations.
         
-        extracted_file = "background_data.json"
-        with open(extracted_file, "w") as file_data:
-            file_data.write(json_data)
-        
-        with ZipFile("background_data.zip", 'w') as zip_file:
-            zip_file.write(extracted_file)
+        Args:
+            image: PIL Image
+                The loaded image the coordinate predictions are inferred for
+            image_draw: PIL ImageDraw module
+                Module for performing drawing operations
+            coordinates: Numpy array
+                Predicted body part coordinates in image
+            image_height: int
+                Height of image
+            image_width: int
+                Width of image
+            segment_width: int
+                Width of association line between markers
+            
+        Returns:
+            Instance of PIL image with annotated body part segments.
+        """
 
-def shap_background_data(folder_path):
-    """ Create background data for SHAP explainer. """
+        # Define segments and colors
+        segments = [(0, 1), (1, 2), (1, 3), (1, 4), (4, 8), (8, 5), (5, 6), (6, 7), (8, 9), (9, 10), (10, 11), (8, 12),
+                    (12, 13), (13, 14), (14, 15), (12, 16), (16, 17), (17, 18)]
+        segment_color = '#5c5a5a'
 
-    df = pd.read_excel(folder_path + "/jama_coordinates.xlsx")
+        # Draw segments
+        for (body_part_a_index, body_part_b_index) in segments:
+            body_part_a_x, body_part_a_y = coordinates[body_part_a_index]
+            body_part_a_x *= image_width
+            body_part_a_y *= image_height
+            body_part_b_x, body_part_b_y = coordinates[body_part_b_index]
+            body_part_b_x *= image_width
+            body_part_b_y *= image_height
+            image_draw.line([(body_part_a_x, body_part_a_y), (body_part_b_x, body_part_b_y)], fill=segment_color,
+                            width=segment_width)
 
-    num_videos = 50
-    num_epochs = num_videos * 12
-    num_CP = round(num_epochs * 0.15)
-    num_non_CP = num_epochs - num_CP
+        return image
 
-    folder_path = folder_path + "/jama_trainval"
-
-    file_names = listdir(folder_path)
-    indexes = list(range(len(file_names)))
-    selected_indexes = random.sample(indexes, num_videos)
-
-    selected_videos = []
-    graph_data = []
-    cp_overview = []
-
-    for i in selected_indexes:
-        selected_videos.append(file_names[i].replace("tracked_", "").replace(".csv", ""))
-        video_info = df[df["Video ID"] == file_names[i].replace("tracked_", "").replace(".csv", "")].squeeze()
-        if video_info.empty:
-            print(file_names[i])
-        frame_rate = video_info["FPS"]
-        CP_inf = video_info["CP"] # Yes or No
-        tracking_coords = read_csv_to_array(folder_path + "/" + file_names[i])
-        tracking_coords = np.array(tracking_coords)
-        data = setup(tracking_coords=tracking_coords, frame_rate=frame_rate)
-        ensemble_models, ensemble_data, output_device = get_model_and_data(data, 1, 1)
-        graph_data.append(ensemble_data)
-        cp_overview.append(True if CP_inf == "Yes" else False)
-
-    print("Number of videos in background data:", len(graph_data))
-    num_CP_videos = cp_overview.count(True)
-    num_non_CP_videos = cp_overview.count(False)
-
-    epochs_CP = round(num_CP/num_CP_videos)
-    epochs_non_CP = round(num_non_CP/num_non_CP_videos)
-
-    concat_data = load_data_all_videos(graph_data, cp_overview, epochs_CP, epochs_non_CP)
-
-    video_info_df = df[df["Video ID"].isin(selected_videos)]
-    video_info_df.to_excel("background_data_info.xlsx", index=False)
     
-    process = tqdm(concat_data)
-
-    for batch_idx, (data_y, index) in enumerate(process):
-        with torch.enable_grad():
-            # Fetch batch
-            if torch.cuda.is_available(): #GPU
-                data_y = Variable(
-                    data_y.float().cuda(output_device),
-                    requires_grad=True)
-            else: #CPU
-                data_y = Variable(
-                    data_y.float(),
-                    requires_grad=True)
+    def display_segments_shap(self, image, image_draw, coordinates, shaps, shaps_max_avg, cmap, image_height=1024,
+                          image_width=1024, segment_width=3):
+        """
+        Draw segments between body parts according to predicted body part locations with SHAP color.
         
-        data_list = data_y.tolist()
-        json_data = json.dumps(data_list, indent=4)
-        with open("background_data.json", "w") as file_data:
-            file_data.write(json_data)
+        Args:
+            image: PIL Image
+                The loaded image the coordinate predictions are inferred for
+            image_draw: PIL ImageDraw module
+                Module for performing drawing operations
+            coordinates: Numpy array
+                Predicted body part coordinates in image
+            image_height: int
+                Height of image
+            image_width: int
+                Width of image
+            segment_width: int
+                Width of association line between markers
+            
+        Returns:
+            Instance of PIL image with annotated body part segments.
+        """
 
+        # Define segments and colors
+        neighbor_link = [(0, 1), (2, 1), (3, 1), (1, 4), (9, 8), (10, 9), (11, 10), (5, 8), (6, 5), (7, 6), (4, 8), (12, 8),
+                        (16, 12), (17, 16), (18, 17), (13, 12), (14, 13), (15, 14)]
+        segment_color = '#5c5a5a'
+
+        shaps_bones = shaps[2]
+
+        # Draw segments
+        for (body_part_a_index, body_part_b_index) in neighbor_link:
+            body_part_a_x, body_part_a_y = coordinates[body_part_a_index]
+            body_part_a_x *= image_width
+            body_part_a_y *= image_height
+            body_part_b_x, body_part_b_y = coordinates[body_part_b_index]
+            body_part_b_x *= image_width
+            body_part_b_y *= image_height
+
+            shap_value = shaps_bones[body_part_a_index]
+            segment_color = get_shap_color(shap_value, shaps_max_avg, cmap)
+
+            image_draw.line([(body_part_a_x, body_part_a_y), (body_part_b_x, body_part_b_y)], fill=segment_color,
+                            width=segment_width)
+
+        return image
+
+
+    def get_shap_color(self, shap_value, shaps_max_avg, cmap):
+        norm = Normalize(vmin=-shaps_max_avg, vmax=shaps_max_avg)
+        normalized_shap = norm(shap_value)
+        color = cmap(normalized_shap)
+
+        # Format the integers into a hexadecimal string
+        rgb_integers = [int(x * 255) for x in color[:3]]
+        hex_color = '#{:02x}{:02x}{:02x}'.format(*rgb_integers)
+
+        return hex_color
