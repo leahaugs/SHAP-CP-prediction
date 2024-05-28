@@ -9,7 +9,7 @@ import shap
 
 from utils.predict_helpers import get_shap_color
 
-class SHAP():
+class SHAP_visualization():
 
     def __init__(self, shap_values):
         self.shap_values = [np.array(s) for s in shap_values]
