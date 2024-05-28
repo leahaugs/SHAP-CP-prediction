@@ -15,9 +15,6 @@ class SHAP():
         self.shap_values = [np.array(s) for s in shap_values]
         self.shaps_one_class = self.shap_values[1] - self.shap_values[0] # CP - no CP
         self.shaps_mean = np.mean(self.shaps_one_class, axis=2)  # mean over the 150 frames
-
-    def get_shaps_mean(self):
-        return self.shaps_mean
     
     def calculate_shaps_average_x_y(self, shap_list):
         """ Calculate SHAP values for x and y coordinates per feature type """
