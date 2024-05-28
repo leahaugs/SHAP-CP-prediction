@@ -1,6 +1,6 @@
 import math
 import os
-from os.path import join, dirname, basename, exists
+from os.path import join, dirname, basename
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,14 +10,33 @@ import shap
 from utils.predict_helpers import get_shap_color
 
 class SHAP_visualization():
+    """
+    Class for visulazing SHAP values.
+    """
 
     def __init__(self, shap_values):
+        """
+        Initialize SHAP visualization class.
+        
+        Args:
+            shap_values: list
+                SHAP values for a video
+        """
+
         self.shap_values = [np.array(s) for s in shap_values]
         self.shaps_one_class = self.shap_values[1] - self.shap_values[0] # CP - no CP
         self.shaps_mean = np.mean(self.shaps_one_class, axis=2)  # mean over the 150 frames
     
-    def calculate_shaps_average_x_y(self, shap_list):
-        """ Calculate SHAP values for x and y coordinates per feature type """
+    def calculate_shaps_average_x_y(self):
+        """
+        Calculate SHAP values for x and y coordinates per feature type.
+        
+        Returns:
+            shaps_dimensions_average: ndarray
+                Average SHAP values for x and y coordinates
+            shaps_max_avg: float
+                Maximum average SHAP value
+        """
 
         shaps_pos = np.mean(self.shaps_mean[:, 0:2, :], axis=1)
         shaps_vel = np.mean(self.shaps_mean[:, 2:4, :], axis=1)
@@ -28,7 +47,27 @@ class SHAP_visualization():
         return shaps_dimensions_average, shaps_max_avg
 
     def visualize_shap_values(self, windows, heatmap, summary_plot, mean_plots, body_parts, video_path, data_video):
-        """ Create heatmap and summary plots of shap values """
+        """
+        Create heatmaps, summary_plots and plots as the average of them with the shap values.
+        
+        Args:
+            windows: int
+                Number of windows
+            heatmap: bool
+                Create heatmap
+            summary_plot: bool
+                Create summary plot
+            mean_plots: bool
+                Create mean plots
+            shaps_mean: ndarray
+                SHAP values where the time frames are averaged
+            body_parts: list
+                List of body parts
+            video_path: string
+                Path to video
+            data_video: ndarray
+                Values for the video
+        """
 
         dimensions = ['position_x', 'position_y', 'velocity_x', 'velocity_y', 'bones_x', 'bones_y']
         max_shap_value = self.shaps_mean.max()
@@ -49,11 +88,9 @@ class SHAP_visualization():
         if mean_plots:
             self.make_mean_plots(self.shaps_mean, data_video, body_parts, dimensions, color_range, cmap, video_path)
 
-
-
     def make_heatmap(self, shap_per_window, time, body_parts, cmap, dimensions, color_range, video_path):
         """
-        Make heatmap of SHAP values for a given window.
+        Create heatmap of SHAP values for a given window.
         
         Args:
             shap_per_window: ndarray
@@ -99,7 +136,7 @@ class SHAP_visualization():
 
     def make_summary_plot(self, shap_per_window, data_video, time, body_parts, video_path):
         """
-        Make summary_plot of SHAP values for a given window.
+        Create summary_plot of SHAP values for a given window.
         
         Args:
             shap_per_window: ndarray
@@ -113,6 +150,7 @@ class SHAP_visualization():
             video_path: string
                 Path to video
         """
+
         data_per_timeframe = data_video[time, :, :, :]
 
         data_per_timeframe = data_per_timeframe.cpu().detach().numpy()
@@ -130,11 +168,11 @@ class SHAP_visualization():
 
     def make_mean_plots(self, shaps_mean, data_video, body_parts, dimensions, color_range, cmap, video_path):
         """
-        Make summary plot and heatmap of mean SHAP values.
+        Create summary plot and heatmap of mean SHAP values.
         
         Args:
             shaps_mean: ndarray
-                Mean SHAP values for all windows
+                SHAP values where the time frames are averaged
             data_video: ndarray
                 Video data
             body_parts: list
@@ -148,6 +186,7 @@ class SHAP_visualization():
             video_path: string
                 Path to video
         """
+
         shaps_overall_mean = np.mean(shaps_mean, axis=0)  # median over all windows
 
         # Sort the shap values
@@ -185,7 +224,27 @@ class SHAP_visualization():
         plt.close()
 
     def make_skeleton_image(self, sample_coords, sample_conns, num_body_parts, groups, shaps_dimensions_average, shaps_max_avg, video_path, split_point):
-        """ Create skeleton image visualiztion using SHAP values."""
+        """
+        Create skeleton image visualiztion using SHAP values.
+        
+        Args:
+            sample_coords: ndarray
+                Sample coordinates for body parts
+            sample_conns: ndarray
+                Sample connections for body parts
+            num_body_points: int
+                Number of body points
+            groups: list
+                List of body part groups
+            shaps_dimensions_average: ndarray
+                Average SHAP values for body parts
+            shaps_max_avg: float
+                Maximum average SHAP value
+            video_path: string
+                Path to video
+            split_point: bool
+                Split point for visualization inside body points
+        """
 
         # Initialize visualization
         location = np.expand_dims(np.expand_dims(np.swapaxes(np.asarray(sample_coords), 0, 1), 1), -1)
@@ -238,6 +297,21 @@ class SHAP_visualization():
         format='png')
 
     def make_video_visualization(self, video_path, tracking_coords, window_preds, groups, split_point):
+        """
+        Create video visualization using SHAP values.
+        
+        Args:
+            video_path: string
+                Path to video
+            tracking_coords: ndarray
+                Tracking coordinates
+            window_preds: ndarray
+                Predictions of all windows
+            groups: list
+                List of body part groups
+            split_point: bool
+                Split point for visualization inside body points
+            """
         pred_interval_seconds = 2.5 # Seconds between each prediction window
         shap_interval_seconds = 5.0 # Seconds between each SHAP update
         preds_per_shap_interval = int(shap_interval_seconds / pred_interval_seconds)
@@ -447,6 +521,19 @@ class SHAP_visualization():
 
 
     def get_shap_color(self, shap_value, shaps_max_avg, cmap):
+        """
+        Get the color of the SHAP value.
+        
+        Args:
+            shape_value: float
+                SHAP value
+            shaps_max_avg: float
+                Maximum SHAP value
+            cmap: matplotlib colormap
+                Colormap for SHAP values
+        Returns:
+            Hexadecimal color string
+        """
         norm = Normalize(vmin=-shaps_max_avg, vmax=shaps_max_avg)
         normalized_shap = norm(shap_value)
         color = cmap(normalized_shap)

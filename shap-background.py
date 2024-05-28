@@ -10,7 +10,13 @@ from tqdm import tqdm
 from utils.predict_helpers import load_data_all_videos, read_csv_to_array, setup, get_model_and_data
 
 def shap_background_data(folder_path):
-    """ Create background data for SHAP explainer. """
+    """ 
+    Create background data for SHAP explainer. 
+    
+    Args:
+        folder_path: string
+            Path to folder with tracker data
+    """
 
     df = pd.read_excel(folder_path + "/jama_coordinates.xlsx")
 
