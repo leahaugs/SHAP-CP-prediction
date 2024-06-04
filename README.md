@@ -14,5 +14,5 @@ The project uses the SHAP implementation in the SHAP fork:
 SHAP fork [https://github.com/Hvcameln/shap]
 
 ### Authors:
-Henriette Viola Christine Ameln
+Henriette Viola Christine Ameln  
 Lea Haug Sandberg
